@@ -10,8 +10,10 @@ import {
   batchNotificationId,
   coalesce,
   diff,
+  filterByPreferences,
   filterEvents,
   notificationId,
+  pushTitle,
 } from "./scoring.js";
 import type { ScoreEvent } from "./types.js";
 
@@ -105,7 +107,11 @@ export class PollWorker {
       .filter((d) => d.eventIds.includes(eventId) && d.follows.length > 0);
 
     for (const device of devices) {
-      const mine = filterEvents(events, device.follows);
+      let mine = filterEvents(events, device.follows);
+      if (mine.length === 0) continue;
+
+      // Score-type prefs (pars off by default) — same gate as iOS AlertPreferences.
+      mine = filterByPreferences(mine, device.alertPreferences);
       if (mine.length === 0) continue;
 
       const fresh = mine.filter(
@@ -131,7 +137,7 @@ export class PollWorker {
 
     const ok = await this.opts.apns.send({
       deviceToken: token,
-      title: eventName,
+      title: pushTitle(eventName, events),
       body,
       threadId: eventId,
       notificationId: id,

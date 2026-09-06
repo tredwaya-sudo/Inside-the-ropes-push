@@ -3,11 +3,13 @@ import {
   batchNotificationId,
   coalesce,
   diff,
+  filterByPreferences,
   filterEvents,
   headline,
   holesCompleted,
   notificationId,
   playIndex,
+  pushTitle,
   scoreName,
 } from "../src/scoring.js";
 import type {
@@ -17,7 +19,7 @@ import type {
   ScoreEvent,
   Snapshot,
 } from "../src/types.js";
-import { HOLE_COUNT } from "../src/types.js";
+import { DEFAULT_ALERT_PREFERENCES, HOLE_COUNT } from "../src/types.js";
 
 function emptyStrokes(): (number | null)[] {
   return Array.from({ length: HOLE_COUNT }, () => null);
@@ -101,7 +103,7 @@ describe("diff — holePosted / scoreCorrected / roundCompleted", () => {
     expect(events[0]!.hole).toBe(2);
     expect(events[0]!.strokes).toBe(3);
     expect(events[0]!.par).toBe(4);
-    expect(scoreName(events[0]!)).toBe("Birdie");
+    expect(scoreName(events[0]!)).toBe("🔥 Birdie");
     expect(events[0]!.holesCompleted).toBe(2);
   });
 
@@ -326,7 +328,69 @@ describe("headline formatting", () => {
       holesCompleted: 5,
     };
     expect(headline(e)).toBe(
-      "Ada Lovelace — Birdie on 7 (3) · thru 5"
+      "Ada Lovelace — 🔥 Birdie on 7 (3) · thru 5"
     );
+  });
+});
+
+describe("scoreName highlights", () => {
+  it("labels hole in one / eagle / birdie with emoji copy", () => {
+    const ace: ScoreEvent = {
+      kind: "holePosted",
+      playerId: "p1",
+      playerName: "Ada",
+      teamId: "t",
+      roundId: 1,
+      hole: 3,
+      playIndex: 2,
+      strokes: 1,
+      par: 3,
+      previousStrokes: null,
+      holesCompleted: 3,
+    };
+    expect(scoreName(ace)).toBe("🚨 BREAKING 🚨 Hole in One");
+    expect(pushTitle("Evt", [ace])).toBe("🚨 BREAKING 🚨 Hole in One");
+
+    const eagle = { ...ace, strokes: 2, par: 4 };
+    expect(scoreName(eagle)).toBe("🦅 Eagle");
+
+    const birdie = { ...ace, strokes: 3, par: 4 };
+    expect(scoreName(birdie)).toBe("🔥 Birdie");
+  });
+});
+
+describe("filterByPreferences", () => {
+  const base: ScoreEvent = {
+    kind: "holePosted",
+    playerId: "p1",
+    playerName: "Ada",
+    teamId: "t",
+    roundId: 1,
+    hole: 1,
+    playIndex: 0,
+    strokes: 4,
+    par: 4,
+    previousStrokes: null,
+    holesCompleted: 1,
+  };
+
+  it("suppresses pars when prefs.pars is false (default)", () => {
+    const par = { ...base, strokes: 4, par: 4 };
+    const birdie = { ...base, strokes: 3, par: 4 };
+    const filtered = filterByPreferences(
+      [par, birdie],
+      DEFAULT_ALERT_PREFERENCES
+    );
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]!.strokes).toBe(3);
+  });
+
+  it("allows pars when prefs.pars is true", () => {
+    const par = { ...base, strokes: 4, par: 4 };
+    const filtered = filterByPreferences([par], {
+      ...DEFAULT_ALERT_PREFERENCES,
+      pars: true,
+    });
+    expect(filtered).toHaveLength(1);
   });
 });

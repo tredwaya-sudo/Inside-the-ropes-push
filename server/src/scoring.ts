@@ -5,6 +5,7 @@
 
 import {
   HOLE_COUNT,
+  type AlertPreferences,
   type Course,
   type FollowTarget,
   type GolfPlayer,
@@ -59,15 +60,17 @@ export function toPar(event: ScoreEvent): number | null {
 }
 
 export function scoreName(event: ScoreEvent): string {
+  // Ace first — regardless of hole par.
+  if (event.strokes === 1) return "🚨 BREAKING 🚨 Hole in One";
   const delta = toPar(event);
   if (delta == null) return "";
   switch (delta) {
     case -3:
       return "Albatross";
     case -2:
-      return "Eagle";
+      return "🦅 Eagle";
     case -1:
-      return "Birdie";
+      return "🔥 Birdie";
     case 0:
       return "Par";
     case 1:
@@ -223,6 +226,54 @@ export function filterEvents(
     if (event.teamId != null && teamIds.has(event.teamId)) return true;
     return false;
   });
+}
+
+/** Gate hole / round events by the device's score-type preferences. */
+export function allowsPreference(
+  prefs: AlertPreferences,
+  event: ScoreEvent
+): boolean {
+  switch (event.kind) {
+    case "roundCompleted":
+      return prefs.roundCompleted;
+    case "holePosted":
+    case "scoreCorrected": {
+      const delta = toPar(event);
+      // Unknown to-par cannot map to a toggle — suppress rather than leak.
+      if (delta == null) return false;
+      if (delta <= -2) return prefs.eaglesAndBetter;
+      if (delta === -1) return prefs.birdies;
+      if (delta === 0) return prefs.pars;
+      if (delta === 1) return prefs.bogeys;
+      return prefs.doubleBogeysAndWorse;
+    }
+    default:
+      return true;
+  }
+}
+
+export function filterByPreferences(
+  events: ScoreEvent[],
+  prefs: AlertPreferences
+): ScoreEvent[] {
+  return events.filter((e) => allowsPreference(prefs, e));
+}
+
+/** Punchy APNs title matching iOS watchTitle for single-hole batches. */
+export function pushTitle(eventName: string, events: ScoreEvent[]): string {
+  if (events.length === 1) {
+    const event = events[0]!;
+    switch (event.kind) {
+      case "holePosted":
+        if (event.strokes === 1) return "🚨 BREAKING 🚨 Hole in One";
+        return `${scoreName(event)} · thru ${event.holesCompleted}`;
+      case "roundCompleted":
+        return `Round ${event.roundId} done`;
+      case "scoreCorrected":
+        return "Score corrected";
+    }
+  }
+  return eventName;
 }
 
 /**

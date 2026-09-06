@@ -8,11 +8,23 @@ const followSchema = z.object({
   name: z.string().optional(),
 });
 
+const alertPreferencesSchema = z.object({
+  eaglesAndBetter: z.boolean(),
+  birdies: z.boolean(),
+  pars: z.boolean(),
+  bogeys: z.boolean(),
+  doubleBogeysAndWorse: z.boolean(),
+  roundCompleted: z.boolean(),
+  hotStreaks: z.boolean().optional(),
+  teeTimes: z.boolean().optional(),
+});
+
 const registerSchema = z.object({
   deviceToken: z.string().min(8),
   platform: z.literal("ios"),
   follows: z.array(followSchema).optional(),
   eventIds: z.array(z.string().min(1)).optional(),
+  alertPreferences: alertPreferencesSchema.optional(),
 });
 
 const followsBodySchema = z.object({
@@ -21,6 +33,10 @@ const followsBodySchema = z.object({
 
 const eventsBodySchema = z.object({
   eventIds: z.array(z.string().min(1)),
+});
+
+const alertPrefsBodySchema = z.object({
+  alertPreferences: alertPreferencesSchema,
 });
 
 export function createRouter(db: PushDb): Router {
@@ -67,6 +83,26 @@ export function createRouter(db: PushDb): Router {
     }
     res.json(device);
   });
+
+  router.put(
+    "/v1/devices/:token/alert-preferences",
+    (req: Request, res: Response) => {
+      const parsed = alertPrefsBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: parsed.error.flatten() });
+        return;
+      }
+      const device = db.setAlertPreferences(
+        req.params.token!,
+        parsed.data.alertPreferences
+      );
+      if (!device) {
+        res.status(404).json({ error: "device not found" });
+        return;
+      }
+      res.json(device);
+    }
+  );
 
   router.delete("/v1/devices/:token", (req: Request, res: Response) => {
     const deleted = db.deleteDevice(req.params.token!);

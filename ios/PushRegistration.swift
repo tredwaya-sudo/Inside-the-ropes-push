@@ -1,9 +1,10 @@
 import Foundation
+import Combine
 import UIKit
 import UserNotifications
 
 /// Registers for remote notifications, captures the APNs device token, and
-/// keeps the push server in sync with local follows / watched events.
+/// keeps the push server in sync with local follows / watched events / alert prefs.
 ///
 /// Wire this up from `InsideTheRopesApp` via `@UIApplicationDelegateAdaptor`.
 final class PushRegistration: NSObject, ObservableObject {
@@ -40,15 +41,20 @@ final class PushRegistration: NSObject, ObservableObject {
         #endif
     }
 
-    /// Full register: token + current follows + event ids the app cares about.
-    func syncToServer(follows: [FollowRecord], eventIds: [String]) async {
+    /// Full register: token + current follows + event ids + alert preferences.
+    func syncToServer(
+        follows: [FollowRecord],
+        eventIds: [String],
+        alertPreferences: AlertPreferences = .load()
+    ) async {
         guard let token = deviceTokenHex else { return }
         let dtos = follows.map { PushAPI.FollowDTO(target: $0.target, name: $0.name) }
         do {
             try await PushAPI.registerDevice(
                 token: token,
                 follows: dtos,
-                eventIds: Array(Set(eventIds))
+                eventIds: Array(Set(eventIds)),
+                alertPreferences: PushAPI.AlertPreferencesDTO(alertPreferences)
             )
         } catch {
             lastError = error.localizedDescription
@@ -74,6 +80,21 @@ final class PushRegistration: NSObject, ObservableObject {
             try await PushAPI.syncEvents(token: token, eventIds: Array(Set(eventIds)))
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    func syncAlertPreferences(_ preferences: AlertPreferences) async {
+        guard let token = deviceTokenHex else { return }
+        do {
+            try await PushAPI.syncAlertPreferences(
+                token: token,
+                preferences: PushAPI.AlertPreferencesDTO(preferences)
+            )
+        } catch {
+            lastError = error.localizedDescription
+            #if DEBUG
+            print("[PushRegistration] alert prefs sync: \(error)")
+            #endif
         }
     }
 }

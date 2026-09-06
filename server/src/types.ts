@@ -56,11 +56,37 @@ export interface ScoreEvent {
   holesCompleted: number;
 }
 
+/** Score-type / event toggles — mirrors iOS AlertPreferences. */
+export interface AlertPreferences {
+  eaglesAndBetter: boolean;
+  birdies: boolean;
+  /** Off by default — every hole is noisy. */
+  pars: boolean;
+  bogeys: boolean;
+  doubleBogeysAndWorse: boolean;
+  roundCompleted: boolean;
+  hotStreaks?: boolean;
+  teeTimes?: boolean;
+}
+
+/** Quiet-by-default for pars, matching the iOS client. */
+export const DEFAULT_ALERT_PREFERENCES: AlertPreferences = {
+  eaglesAndBetter: true,
+  birdies: true,
+  pars: false,
+  bogeys: true,
+  doubleBogeysAndWorse: true,
+  roundCompleted: true,
+  hotStreaks: true,
+  teeTimes: true,
+};
+
 export interface DeviceRecord {
   deviceToken: string;
   platform: "ios";
   follows: FollowTarget[];
   eventIds: string[];
+  alertPreferences: AlertPreferences;
   updatedAt: string;
 }
 
@@ -69,4 +95,5 @@ export interface RegisterDeviceBody {
   platform: "ios";
   follows?: FollowTarget[];
   eventIds?: string[];
+  alertPreferences?: AlertPreferences;
 }

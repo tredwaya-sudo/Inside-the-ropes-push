@@ -7,7 +7,7 @@ enum PushAPI {
 
     /// Production or staging push server. No trailing slash.
     /// Example: https://push.insidetheropes.app
-    static var baseURL: URL = URL(string: "http://127.0.0.1:8787")!
+    static var baseURL: URL = URL(string: "https://inside-the-ropes-push.onrender.com")!
 
     enum APIError: Error {
         case notConfigured
@@ -39,11 +39,35 @@ enum PushAPI {
         }
     }
 
+    /// Mirrors `AlertPreferences` for the push worker score-type gate.
+    struct AlertPreferencesDTO: Codable, Hashable {
+        var eaglesAndBetter: Bool
+        var birdies: Bool
+        var pars: Bool
+        var bogeys: Bool
+        var doubleBogeysAndWorse: Bool
+        var roundCompleted: Bool
+        var hotStreaks: Bool
+        var teeTimes: Bool
+
+        init(_ prefs: AlertPreferences) {
+            eaglesAndBetter = prefs.eaglesAndBetter
+            birdies = prefs.birdies
+            pars = prefs.pars
+            bogeys = prefs.bogeys
+            doubleBogeysAndWorse = prefs.doubleBogeysAndWorse
+            roundCompleted = prefs.roundCompleted
+            hotStreaks = prefs.hotStreaks
+            teeTimes = prefs.teeTimes
+        }
+    }
+
     struct RegisterBody: Codable {
         let deviceToken: String
         let platform: String
         let follows: [FollowDTO]
         let eventIds: [String]
+        let alertPreferences: AlertPreferencesDTO?
     }
 
     // MARK: - Public API
@@ -51,13 +75,15 @@ enum PushAPI {
     static func registerDevice(
         token: String,
         follows: [FollowDTO],
-        eventIds: [String]
+        eventIds: [String],
+        alertPreferences: AlertPreferencesDTO? = nil
     ) async throws {
         let body = RegisterBody(
             deviceToken: token,
             platform: "ios",
             follows: follows,
-            eventIds: eventIds
+            eventIds: eventIds,
+            alertPreferences: alertPreferences
         )
         _ = try await request(
             method: "POST",
@@ -81,6 +107,15 @@ enum PushAPI {
             method: "POST",
             path: "/v1/devices/\(token)/events",
             body: Body(eventIds: eventIds)
+        )
+    }
+
+    static func syncAlertPreferences(token: String, preferences: AlertPreferencesDTO) async throws {
+        struct Body: Codable { let alertPreferences: AlertPreferencesDTO }
+        _ = try await request(
+            method: "PUT",
+            path: "/v1/devices/\(token)/alert-preferences",
+            body: Body(alertPreferences: preferences)
         )
     }
 
