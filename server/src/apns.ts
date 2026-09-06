@@ -59,7 +59,8 @@ export class ApnsSender {
     const note = new apn.Notification();
     note.topic = this.config.bundleId;
     note.alert = { title: payload.title, body: payload.body };
-    note.sound = "default";
+    // Bundled iOS sound (InsideTheRopes/cup_drop.caf) — ball-in-cup.
+    note.sound = "cup_drop.caf";
     note.threadId = payload.threadId;
     // apns-id must be UUID; collapseId replaces same logical alert
     note.collapseId = payload.notificationId.slice(0, 64); // not note.id — apns-id must be UUID
