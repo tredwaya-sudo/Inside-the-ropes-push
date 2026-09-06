@@ -1,0 +1,15 @@
+// === PATCH footer copy in FollowingView.swift ===
+// Replace the Section footer that currently says alerts only work while open.
+
+                Section {
+                    if store.alertsOn {
+                        Label("Alerts are on", systemImage: "checkmark.circle.fill")
+                            .foregroundColor(Brand.pine)
+                    } else {
+                        Button("Turn on alerts") {
+                            Task { await store.requestAlerts() }
+                        }
+                    }
+                } footer: {
+                    Text("Alerts arrive in the background while you follow players or teams on a live event. Open a leaderboard once so the server knows which tournament to watch.")
+                }

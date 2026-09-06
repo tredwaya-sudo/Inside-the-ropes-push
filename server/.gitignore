@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/
+.env
+*.sqlite
+*.sqlite-*
+AuthKey_*.p8
+.DS_Store
+coverage/
+
+secrets/
+.env

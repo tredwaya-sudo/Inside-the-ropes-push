@@ -1,0 +1,54 @@
+// === PATCH NOTES for AppStore.swift ===
+//
+// A) After a successful requestAlerts() / when alertsOn becomes true,
+//    call PushRegistration.shared.registerForRemoteNotifications().
+//
+// B) After toggle(_:name:) saves follows, sync to the push server.
+// C) After loadEvent / when an event is being watched, sync event ids.
+// D) Add syncPushRegistration() helper.
+
+// --- Add near Notifications / Follows section ---
+
+/// Push every follow + currently loaded / live event ids to the server.
+func syncPushRegistration() async {
+    let eventIds = Array(snapshotsByEvent.keys)
+    await PushRegistration.shared.syncToServer(
+        follows: Array(follows),
+        eventIds: eventIds
+    )
+}
+
+// --- Inside toggle(_:name:), after saveFollows() ---
+
+func toggle(_ target: FollowTarget, name: String) {
+    let record = FollowRecord(target: target, name: name)
+    if follows.contains(record) {
+        follows.remove(record)
+    } else {
+        follows.insert(record)
+    }
+    saveFollows()
+    Task { await PushRegistration.shared.syncFollowsOnly(Array(follows)) }
+}
+
+// --- Inside requestAlerts(), after setting alertsOn ---
+
+func requestAlerts() async {
+    do {
+        alertsOn = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+        if alertsOn {
+            PushRegistration.shared.registerForRemoteNotifications()
+            await syncPushRegistration()
+        }
+    } catch {
+        log("authorization: \(error)")
+        alertsOn = false
+    }
+}
+
+// --- Inside loadEvent ---
+
+func loadEvent(_ event: Tournament) async {
+    await poll(event, notify: false)
+    await PushRegistration.shared.syncEventsOnly(Array(snapshotsByEvent.keys))
+}

@@ -1,0 +1,48 @@
+// === REPLACE / MERGE into InsideTheRopesApp.swift ===
+// 1. Add @UIApplicationDelegateAdaptor
+// 2. Set PushAPI.baseURL in init
+// 3. Register for remote notifications when alerts are on / scene active
+
+import SwiftUI
+import UserNotifications
+
+@main
+struct InsideTheRopesApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var store = AppStore()
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        UNUserNotificationCenter.current().delegate = NotificationPresenter.shared
+
+        // Point at your deployed push server (no trailing slash).
+        #if DEBUG
+        PushAPI.baseURL = URL(string: "http://127.0.0.1:8787")!
+        #else
+        PushAPI.baseURL = URL(string: "https://YOUR-PUSH-HOST")!
+        #endif
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            RootView()
+                .environmentObject(store)
+                .preferredColorScheme(.light)
+                .onChange(of: scenePhase) { phase in
+                    if phase == .active {
+                        Task {
+                            await store.refreshAlertStatus()
+                            if store.alertsOn {
+                                PushRegistration.shared.registerForRemoteNotifications()
+                                await store.syncPushRegistration()
+                            }
+                        }
+                    } else if phase == .background {
+                        store.stopAllPolling()
+                    }
+                }
+        }
+    }
+}
+
+// RootView / NotificationPresenter unchanged
