@@ -16,6 +16,13 @@ import { findCourse, holesCompleted } from "./scoring.js";
 
 const REF_DATE_OFFSET_SEC = 978_307_200; // Unix → Apple reference date
 
+/** Deterministic App Group JPEG name — must match iOS WidgetImageCache.fileName(forEntryId:). */
+function imageFileNameForEntryId(id: string): string {
+  const safe = id.replace(/\//g, "_").replace(/:/g, "_");
+  return `${safe}.jpg`;
+}
+
+
 export interface LiveScoresPlayerState {
   id: string;
   name: string;
@@ -271,7 +278,7 @@ function playerState(ranked: Ranked): LiveScoresPlayerState | null {
     isHot: isHot(player, snapshot),
     isTeam: false,
     isFinished: finished,
-    imageFileName: null,
+    imageFileName: imageFileNameForEntryId(player.id),
   };
 }
 
@@ -346,7 +353,7 @@ export function buildLiveScoresContentState(
           isHot: false,
           isTeam: true,
           isFinished: finished,
-          imageFileName: null,
+          imageFileName: imageFileNameForEntryId(follow.id),
         };
         if (!candidates.some((c) => c.id === state.id)) {
           candidates.push(state);
