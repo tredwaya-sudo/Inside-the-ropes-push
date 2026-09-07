@@ -282,6 +282,71 @@ function playerState(ranked: Ranked): LiveScoresPlayerState | null {
   };
 }
 
+interface TeamStanding {
+  id: string;
+  name: string;
+  toPar: number;
+  thru: number;
+  rank: number;
+  tied: boolean;
+}
+
+/** Team standings from counting scores (top N to-par), competition ranks with ties. */
+function rankTeams(snapshot: Snapshot, countingSize = 4): Map<string, TeamStanding> {
+  const byTeam = new Map<string, GolfPlayer[]>();
+  for (const player of snapshot.players) {
+    if (!player.teamId) continue;
+    const list = byTeam.get(player.teamId) ?? [];
+    list.push(player);
+    byTeam.set(player.teamId, list);
+  }
+
+  const standings: Omit<TeamStanding, "rank" | "tied">[] = [];
+  for (const [teamId, members] of byTeam) {
+    const scored = members
+      .map((p) => ({
+        player: p,
+        toPar: tournamentToPar(p, snapshot),
+        thru: currentRound(p)?.thru ?? 0,
+      }))
+      .filter((m) => m.toPar != null && m.thru > 0)
+      .sort((a, b) => {
+        const l = a.toPar as number;
+        const r = b.toPar as number;
+        if (l !== r) return l - r;
+        return a.player.id.localeCompare(b.player.id);
+      });
+    if (scored.length === 0) continue;
+    const counting = scored.slice(0, Math.min(countingSize, scored.length));
+    const teamToPar = counting.reduce((sum, m) => sum + (m.toPar as number), 0);
+    const thru = Math.min(...counting.map((m) => m.thru));
+    if (thru <= 0) continue;
+    const name = members[0]?.teamName || teamId;
+    standings.push({ id: teamId, name, toPar: teamToPar, thru });
+  }
+
+  standings.sort((a, b) => {
+    if (a.toPar !== b.toPar) return a.toPar - b.toPar;
+    return a.name.localeCompare(b.name);
+  });
+
+  const map = new Map<string, TeamStanding>();
+  let i = 0;
+  while (i < standings.length) {
+    const score = standings[i]!.toPar;
+    let j = i;
+    while (j < standings.length && standings[j]!.toPar === score) j += 1;
+    const place = i + 1;
+    const tied = j - i > 1;
+    for (let k = i; k < j; k++) {
+      const row = standings[k]!;
+      map.set(row.id, { ...row, rank: place, tied });
+    }
+    i = j;
+  }
+  return map;
+}
+
 /**
  * Build Live Scores content-state for a device's follows across event snapshots.
  * Returns null when nothing started is available.
@@ -318,37 +383,23 @@ export function buildLiveScoresContentState(
           eventNameById.set(state.id, snap.eventName);
         }
       } else if (follow.type === "team") {
-        // Aggregate counting = top 4 by to-par among team members with scores.
-        const members = snap.players.filter((p) => p.teamId === follow.id);
-        if (members.length === 0) continue;
-        const scores = members
-          .map((p) => tournamentToPar(p, snap))
-          .filter((v): v is number => v != null)
-          .sort((a, b) => a - b);
-        if (scores.length === 0) continue;
-        const counting = scores.slice(0, Math.min(4, scores.length));
-        const teamToPar = counting.reduce((a, b) => a + b, 0);
-        const thrus = members
-          .map((p) => currentRound(p)?.thru ?? 0)
-          .filter((t) => t > 0);
-        const thru = thrus.length ? Math.min(...thrus) : 0;
-        if (thru <= 0) continue;
-        const finished = thru >= HOLE_COUNT;
-        const name =
-          members[0]?.teamName ||
-          follow.name ||
-          follow.id;
+        // Rank full field so followed team gets real place (1st / T2 / …), not "—".
+        const teamRanks = rankTeams(snap, 4);
+        const standing = teamRanks.get(follow.id);
+        if (!standing) continue;
+        const finished = standing.thru >= HOLE_COUNT;
+        const name = standing.name || follow.name || follow.id;
         const state: LiveScoresPlayerState = {
           id: follow.id,
           name,
           lastName: lastName(name),
           shortName: shortName(name),
           teamName: null,
-          toPar: teamToPar,
-          toParLabel: parLabel(teamToPar),
-          rank: null,
-          placeLabel: "—",
-          thruLabel: finished ? "F" : `Thru ${thru}`,
+          toPar: standing.toPar,
+          toParLabel: parLabel(standing.toPar),
+          rank: standing.rank,
+          placeLabel: placeLabel(standing.rank, standing.tied),
+          thruLabel: finished ? "F" : `Thru ${standing.thru}`,
           lastHoleLabel: null,
           isHot: false,
           isTeam: true,
@@ -358,6 +409,13 @@ export function buildLiveScoresContentState(
         if (!candidates.some((c) => c.id === state.id)) {
           candidates.push(state);
           eventNameById.set(state.id, snap.eventName);
+        } else {
+          const idx = candidates.findIndex((c) => c.id === state.id);
+          const prev = candidates[idx]!;
+          if ((state.toPar ?? 999) < (prev.toPar ?? 999)) {
+            candidates[idx] = state;
+            eventNameById.set(state.id, snap.eventName);
+          }
         }
       }
     }
