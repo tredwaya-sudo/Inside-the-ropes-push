@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import type { PushDb } from "./db.js";
+import type { ApnsEnvironment } from "./types.js";
 
 const followSchema = z.object({
   type: z.enum(["player", "team"]),
@@ -112,6 +113,46 @@ export function createRouter(db: PushDb): Router {
     }
     res.status(204).send();
   });
+
+  const liveActivitySchema = z.object({
+    activityToken: z.string().min(8),
+    kind: z.string().min(1).default("live-scores"),
+    apnsEnvironment: z.enum(["sandbox", "production"]),
+  });
+
+  router.put("/v1/devices/:token/live-activities", (req: Request, res: Response) => {
+    const parsed = liveActivitySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
+    if (!db.getDevice(req.params.token!)) {
+      // Auto-create a shell device so LA registration is not blocked on alert sync order.
+      db.upsertDevice({
+        deviceToken: req.params.token!,
+        platform: "ios",
+      });
+    }
+    const record = db.upsertLiveActivity({
+      deviceToken: req.params.token!,
+      kind: parsed.data.kind,
+      activityToken: parsed.data.activityToken,
+      apnsEnvironment: parsed.data.apnsEnvironment as ApnsEnvironment,
+    });
+    res.json(record);
+  });
+
+  router.delete(
+    "/v1/devices/:token/live-activities/:kind",
+    (req: Request, res: Response) => {
+      const deleted = db.deleteLiveActivity(req.params.token!, req.params.kind!);
+      if (!deleted) {
+        res.status(404).json({ error: "live activity not found" });
+        return;
+      }
+      res.status(204).send();
+    }
+  );
 
   return router;
 }

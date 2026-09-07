@@ -42,7 +42,12 @@ const apns = new ApnsSender(
     production: (process.env.APNS_PRODUCTION ?? "false").toLowerCase() === "true",
     dryRun: APNS_DRY_RUN || !hasApnsCreds,
   },
-  (token, reason) => {
+  (token, reason, kind) => {
+    if (kind === "liveactivity") {
+      console.warn(`[apns] dropping LA token ${token.slice(0, 8)}… (${reason})`);
+      db.deleteLiveActivityByActivityToken(token);
+      return;
+    }
     console.warn(`[apns] dropping device ${token.slice(0, 8)}… (${reason})`);
     db.deleteDevice(token);
   }

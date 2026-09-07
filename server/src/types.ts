@@ -97,3 +97,15 @@ export interface RegisterDeviceBody {
   eventIds?: string[];
   alertPreferences?: AlertPreferences;
 }
+
+
+export type ApnsEnvironment = "sandbox" | "production";
+
+export interface LiveActivityRecord {
+  deviceToken: string;
+  kind: string;
+  activityToken: string;
+  apnsEnvironment: ApnsEnvironment;
+  lastFingerprint: string | null;
+  updatedAt: string;
+}

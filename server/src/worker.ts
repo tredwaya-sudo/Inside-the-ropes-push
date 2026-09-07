@@ -1,11 +1,16 @@
 /**
  * Background poller: every POLL_INTERVAL_MS, fetch Clippd snapshots for
  * subscribed events, diff, filter per device, coalesce, push via APNs.
+ * Also pushes ActivityKit Live Scores content-state when followed scores change.
  */
 
 import type { ApnsSender } from "./apns.js";
 import type { ClippdClient } from "./clippd.js";
 import type { PushDb } from "./db.js";
+import {
+  buildLiveScoresContentState,
+  contentStateFingerprint,
+} from "./liveActivity.js";
 import {
   batchNotificationId,
   coalesce,
@@ -15,7 +20,7 @@ import {
   notificationId,
   pushTitle,
 } from "./scoring.js";
-import type { ScoreEvent } from "./types.js";
+import type { ScoreEvent, Snapshot } from "./types.js";
 
 export interface WorkerOptions {
   db: PushDb;
@@ -39,11 +44,8 @@ export class PollWorker {
   start(): void {
     if (this.timer) return;
     this.log(`starting poll every ${this.opts.intervalMs}ms`);
-    // Kick once immediately, then on interval.
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.opts.intervalMs);
-    // Don't keep the process alive solely for the timer if tests want to exit —
-    // but in production the HTTP server keeps us up.
     this.timer.unref?.();
   }
 
@@ -79,7 +81,7 @@ export class PollWorker {
 
   private async pollEvent(eventId: string): Promise<void> {
     const previous = this.opts.db.getSnapshot(eventId);
-    let current;
+    let current: Snapshot;
     try {
       current = await this.opts.clippd.snapshot(
         eventId,
@@ -94,10 +96,11 @@ export class PollWorker {
 
     this.opts.db.saveSnapshot(current);
 
-    // First sight of an event is not news.
     const events = diff(previous, current);
     if (events.length === 0) {
       this.log(`${eventId}: no score events`);
+      // Still refresh Live Activities periodically? Skip — fingerprint gate
+      // needs a change. No-op when board unchanged.
       return;
     }
     this.log(`${eventId}: ${events.length} raw event(s)`);
@@ -107,20 +110,95 @@ export class PollWorker {
       .filter((d) => d.eventIds.includes(eventId) && d.follows.length > 0);
 
     for (const device of devices) {
-      let mine = filterEvents(events, device.follows);
-      if (mine.length === 0) continue;
+      const followedEvents = filterEvents(events, device.follows);
 
-      // Score-type prefs (pars off by default) — same gate as iOS AlertPreferences.
-      mine = filterByPreferences(mine, device.alertPreferences);
-      if (mine.length === 0) continue;
+      // Alert pushes — gated by score-type preferences.
+      let alertEvents = followedEvents;
+      if (alertEvents.length > 0) {
+        alertEvents = filterByPreferences(alertEvents, device.alertPreferences);
+        const fresh = alertEvents.filter(
+          (e) => !this.opts.db.wasDelivered(device.deviceToken, notificationId(e))
+        );
+        if (fresh.length > 0) {
+          await this.pushToDevice(
+            device.deviceToken,
+            current.eventName,
+            eventId,
+            fresh
+          );
+        }
+      }
 
-      const fresh = mine.filter(
-        (e) => !this.opts.db.wasDelivered(device.deviceToken, notificationId(e))
-      );
-      if (fresh.length === 0) continue;
-
-      await this.pushToDevice(device.deviceToken, current.eventName, eventId, fresh);
+      // Live Activity content-state — any followed score change, not alert prefs.
+      if (followedEvents.length > 0) {
+        await this.pushLiveActivityForDevice(device.deviceToken, device.follows);
+      }
     }
+  }
+
+  private async pushLiveActivityForDevice(
+    deviceToken: string,
+    follows: { type: "player" | "team"; id: string; name?: string }[]
+  ): Promise<void> {
+    const la = this.opts.db.getLiveActivity(deviceToken, "live-scores");
+    if (!la) return;
+
+    const device = this.opts.db.getDevice(deviceToken);
+    if (!device) return;
+
+    const snapshots: Snapshot[] = [];
+    for (const eventId of device.eventIds) {
+      const snap = this.opts.db.getSnapshot(eventId);
+      if (snap) snapshots.push(snap);
+    }
+    if (snapshots.length === 0) return;
+
+    const state = buildLiveScoresContentState(follows, snapshots);
+    if (!state) {
+      // Keep last Lock Screen content on transient empty rebuilds
+      // (partial snapshot / board blip). Client owns unfollow teardown.
+      this.log(
+        `LA skip empty content-state for ${deviceToken.slice(0, 8)}… — retaining activity`
+      );
+      return;
+    }
+
+    const fingerprint = contentStateFingerprint(state);
+    if (fingerprint === la.lastFingerprint) {
+      this.log(`LA skip identical fingerprint for ${deviceToken.slice(0, 8)}…`);
+      return;
+    }
+
+    // Strip nulls so Swift optional decoding is happy; keep required fields.
+    const contentState = JSON.parse(
+      JSON.stringify(state, (_k, v) => (v === null ? undefined : v))
+    ) as Record<string, unknown>;
+
+    const allFinished = state.players.every((p) => p.isFinished);
+    const ok = await this.opts.apns.sendLiveActivity({
+      activityPushToken: la.activityToken,
+      event: allFinished ? "end" : "update",
+      contentState,
+      environment: la.apnsEnvironment,
+      dismissalDate: allFinished
+        ? Math.floor(Date.now() / 1000) + 3 * 60
+        : undefined,
+    });
+
+    if (ok) {
+      this.opts.db.setLiveActivityFingerprint(
+        deviceToken,
+        "live-scores",
+        fingerprint
+      );
+      if (allFinished) {
+        this.opts.db.deleteLiveActivity(deviceToken, "live-scores");
+      }
+    }
+
+    this.log(
+      `LA ${allFinished ? "end" : "update"} → ${la.activityToken.slice(0, 8)}… ok=${ok} env=${la.apnsEnvironment} lastError=${this.opts.apns.lastError ?? "none"}`
+    );
   }
 
   private async pushToDevice(
@@ -143,7 +221,6 @@ export class PollWorker {
       notificationId: id,
     });
 
-    // Only mark delivered on success so BadMessageId / transient failures retry.
     if (ok) {
       this.opts.db.markDelivered(
         token,

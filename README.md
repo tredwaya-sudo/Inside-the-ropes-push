@@ -44,6 +44,8 @@ npm start serves the HTTP API and runs the background worker in-process
 | PUT | /v1/devices/:token/follows | Replace follow list |
 | POST | /v1/devices/:token/events | Replace watched tournament ids |
 | DELETE | /v1/devices/:token | Unregister (also on BadDeviceToken) |
+| PUT | /v1/devices/:token/live-activities | Register ActivityKit push token (`activityToken`, `kind`, `apnsEnvironment`) |
+| DELETE | /v1/devices/:token/live-activities/:kind | Clear Live Activity token |
 
 Device JSON body:
   deviceToken (string), platform: "ios",
@@ -103,3 +105,19 @@ Any Node 20+ host works (Fly, Render, a VPS, etc.):
 
 See ios/INTEGRATION.md for exact steps against
 /Users/andrewtredway/Desktop/InsideTheRopes-app copy/InsideTheRopes/
+
+
+## Live Activity push updates
+
+Live Scores Lock Screen / Dynamic Island activities request `pushType: .token`.
+The iOS app uploads the ActivityKit push token with `apnsEnvironment`
+(`sandbox` for Debug, `production` for TestFlight/App Store).
+
+When the worker sees a followed score change it:
+
+1. Builds `LiveScoresActivityAttributes.ContentState` from stored snapshots
+2. Sends an APNs Live Activity push (`apns-push-type: liveactivity`,
+   topic `{bundleId}.push-type.liveactivity`) on the matching sandbox/production gateway
+3. Skips identical fingerprints so unchanged boards do not burn update budget
+
+Alert preference toggles do **not** gate Live Activity score updates.

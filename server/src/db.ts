@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
-import type { AlertPreferences, DeviceRecord, FollowTarget, Snapshot } from "./types.js";
+import type { AlertPreferences, ApnsEnvironment, DeviceRecord, FollowTarget, LiveActivityRecord, Snapshot } from "./types.js";
 import { DEFAULT_ALERT_PREFERENCES } from "./types.js";
 
 function mergeAlertPreferences(
@@ -47,6 +47,18 @@ export class PushDb {
       );
 
       CREATE INDEX IF NOT EXISTS idx_delivered_device ON delivered(device_token);
+
+      CREATE TABLE IF NOT EXISTS live_activities (
+        device_token TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        activity_token TEXT NOT NULL,
+        apns_environment TEXT NOT NULL CHECK (apns_environment IN ('sandbox', 'production')),
+        last_fingerprint TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (device_token, kind)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_live_activities_token ON live_activities(activity_token);
     `);
 
     // Older installs created devices without alert_prefs_json.
@@ -191,6 +203,7 @@ export class PushDb {
       .prepare(`DELETE FROM devices WHERE device_token = ?`)
       .run(token);
     this.db.prepare(`DELETE FROM delivered WHERE device_token = ?`).run(token);
+    this.db.prepare(`DELETE FROM live_activities WHERE device_token = ?`).run(token);
     return result.changes > 0;
   }
 
@@ -266,6 +279,128 @@ export class PushDb {
       for (const id of ids) stmt.run(token, id, now);
     });
     tx(notificationIds);
+  }
+
+
+  upsertLiveActivity(input: {
+    deviceToken: string;
+    kind: string;
+    activityToken: string;
+    apnsEnvironment: ApnsEnvironment;
+  }): LiveActivityRecord {
+    const updatedAt = new Date().toISOString();
+    const existing = this.getLiveActivity(input.deviceToken, input.kind);
+    this.db
+      .prepare(
+        `INSERT INTO live_activities (device_token, kind, activity_token, apns_environment, last_fingerprint, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(device_token, kind) DO UPDATE SET
+           activity_token = excluded.activity_token,
+           apns_environment = excluded.apns_environment,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        input.deviceToken,
+        input.kind,
+        input.activityToken,
+        input.apnsEnvironment,
+        existing?.lastFingerprint ?? null,
+        updatedAt
+      );
+    return {
+      deviceToken: input.deviceToken,
+      kind: input.kind,
+      activityToken: input.activityToken,
+      apnsEnvironment: input.apnsEnvironment,
+      lastFingerprint: existing?.lastFingerprint ?? null,
+      updatedAt,
+    };
+  }
+
+  getLiveActivity(deviceToken: string, kind: string): LiveActivityRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT device_token, kind, activity_token, apns_environment, last_fingerprint, updated_at
+         FROM live_activities WHERE device_token = ? AND kind = ?`
+      )
+      .get(deviceToken, kind) as
+      | {
+          device_token: string;
+          kind: string;
+          activity_token: string;
+          apns_environment: ApnsEnvironment;
+          last_fingerprint: string | null;
+          updated_at: string;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      deviceToken: row.device_token,
+      kind: row.kind,
+      activityToken: row.activity_token,
+      apnsEnvironment: row.apns_environment,
+      lastFingerprint: row.last_fingerprint,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  deleteLiveActivity(deviceToken: string, kind: string): boolean {
+    const result = this.db
+      .prepare(`DELETE FROM live_activities WHERE device_token = ? AND kind = ?`)
+      .run(deviceToken, kind);
+    return result.changes > 0;
+  }
+
+  deleteLiveActivityByActivityToken(activityToken: string): boolean {
+    const result = this.db
+      .prepare(`DELETE FROM live_activities WHERE activity_token = ?`)
+      .run(activityToken);
+    return result.changes > 0;
+  }
+
+  listLiveActivities(kind?: string): LiveActivityRecord[] {
+    const rows = (
+      kind
+        ? this.db
+            .prepare(
+              `SELECT device_token, kind, activity_token, apns_environment, last_fingerprint, updated_at
+               FROM live_activities WHERE kind = ?`
+            )
+            .all(kind)
+        : this.db
+            .prepare(
+              `SELECT device_token, kind, activity_token, apns_environment, last_fingerprint, updated_at
+               FROM live_activities`
+            )
+            .all()
+    ) as Array<{
+      device_token: string;
+      kind: string;
+      activity_token: string;
+      apns_environment: ApnsEnvironment;
+      last_fingerprint: string | null;
+      updated_at: string;
+    }>;
+    return rows.map((row) => ({
+      deviceToken: row.device_token,
+      kind: row.kind,
+      activityToken: row.activity_token,
+      apnsEnvironment: row.apns_environment,
+      lastFingerprint: row.last_fingerprint,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  setLiveActivityFingerprint(
+    deviceToken: string,
+    kind: string,
+    fingerprint: string
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE live_activities SET last_fingerprint = ?, updated_at = ? WHERE device_token = ? AND kind = ?`
+      )
+      .run(fingerprint, new Date().toISOString(), deviceToken, kind);
   }
 
   close(): void {
